@@ -1,9 +1,7 @@
 const express = require("express");
-const bodyParser = require("body-parser");
 const line = require("@line/bot-sdk");
 const axios = require("axios");
 require("dotenv").config();
-
 
 const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 const CHANNEL_SECRET = process.env.CHANNEL_SECRET;
@@ -16,29 +14,76 @@ const config = {
 
 const app = express();
 const client = new line.Client(config);
+const userConversations = new Map();
 
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+app.post(
+  "/callback",
+  express.raw({ type: "application/json" }),
+  line.middleware(config),
+  async (req, res) => {
+    try {
+      const results = await Promise.all(req.body.events.map(handleEvent));
+      res.json(results);
+    } catch (error) {
+      console.error("Error occurred while processing events:", error);
 
-app.post("/callback", line.middleware(config), (req, res) => {
-  Promise.all(req.body.events.map(handleEvent)).then((result) => res.json(result));
-});
+      // ダミーメッセージを送信
+      if (req.body.events && req.body.events.length > 0) {
+        const replyToken = req.body.events[0].replyToken;
+        const dummyMessage = {
+          type: "text",
+          text: "申し訳ありません。現在、問題が発生しております。",
+        };
 
-async function handleEvent(event) {
-  if (event.type !== "message" || event.message.type !== "text") {
-    return Promise.resolve(null);
+        await client.replyMessage(replyToken, dummyMessage);
+      }
+
+      res.status(500).send("Internal Server Error");
+    }
+  }
+);
+
+const max_conversation_length = 4000; // 最大文字数を設定
+
+function trimConversation(conversation) {
+  let current_length = conversation.join('').length;
+
+  while (current_length > max_conversation_length) {
+    conversation.shift(); // 最初のメッセージを削除
+    current_length = conversation.join('').length;
   }
 
-  const userText = event.message.text;
+  return conversation;
+}
 
+async function handleEvent(event) {
   try {
+    if (event.type !== "message" || event.message.type !== "text") {
+      return Promise.resolve(null);
+    }
+
+    const userId = event.source.userId;
+    if (!userConversations[userId]) {
+      userConversations[userId] = [];
+    }
+
+    const userText = event.message.text;
+    const userMessage = `質問: ${userText}\n返事: `;
+
+    userConversations[userId].push(userMessage);
+    userConversations[userId] = trimConversation(userConversations[userId]); // 会話をトリミング
+
+    // 会話を連結して、prompt に使用
+    const conversationText = `私はOpenAIによって訓練された大規模な言語モデルであるChatGPTです。質問に答えたり、会話に参加することが私の目的です。` + userConversations[userId].join('\n');
+
+    // GPT-4に質問を投げる処理...
     const response = await axios.post(
       "https://api.openai.com/v1/engines/davinci-codex/completions",
       {
-        prompt: userText,
-        max_tokens: 50,
+        prompt: conversationText,
+        max_tokens: 200,
         n: 1,
-        stop: null,
+        stop: ["\n"],
         temperature: 0.5,
       },
       {
@@ -50,6 +95,8 @@ async function handleEvent(event) {
     );
 
     const replyText = response.data.choices[0].text.trim();
+    userConversations[userId].push(replyText);
+
     return client.replyMessage(event.replyToken, { type: "text", text: replyText });
   } catch (error) {
     console.error("Error while generating response:", error);
