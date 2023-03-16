@@ -43,48 +43,29 @@ app.post(
   }
 );
 
-const max_conversation_length = 4000; // 最大文字数を設定
-
-function trimConversation(conversation) {
-  let current_length = conversation.join('').length;
-
-  while (current_length > max_conversation_length) {
-    conversation.shift(); // 最初のメッセージを削除
-    current_length = conversation.join('').length;
-  }
-
-  return conversation;
-}
-
 async function handleEvent(event) {
   try {
     if (event.type !== "message" || event.message.type !== "text") {
       return Promise.resolve(null);
     }
 
-    const userId = event.source.userId;
-    if (!userConversations[userId]) {
-      userConversations[userId] = [];
-    }
-
     const userText = event.message.text;
-    const userMessage = `質問: ${userText}\n返事: `;
-
-    userConversations[userId].push(userMessage);
-    userConversations[userId] = trimConversation(userConversations[userId]); // 会話をトリミング
-
-    // 会話を連結して、prompt に使用
-    const conversationText = `私はOpenAIによって訓練された大規模な言語モデルであるChatGPTです。質問に答えたり、会話に参加することが私の目的です。` + userConversations[userId].join('\n');
+    const messages = [
+      {"role":"system", "content":"丁寧語はやめて"},
+      {"role":"system", "content":"関西弁で回答して"},
+      {"role":"user", "content":userText}
+    ];
 
     // GPT-4に質問を投げる処理...
     const response = await axios.post(
-      "https://api.openai.com/v1/engines/davinci-codex/completions",
+      "https://api.openai.com/v1/chat/completions",
       {
-        prompt: conversationText,
-        max_tokens: 200,
+        model: "gpt-3.5-turbo",
+        messages,
+        max_tokens: 2000,
         n: 1,
-        stop: ["\n"],
-        temperature: 0.5,
+        stop: "none",
+        temperature: 1,
       },
       {
         headers: {
@@ -94,8 +75,8 @@ async function handleEvent(event) {
       }
     );
 
-    const replyText = response.data.choices[0].text.trim();
-    userConversations[userId].push(replyText);
+    console.log(userText)
+    const replyText = response.data.choices[0].message.content.trim();
 
     return client.replyMessage(event.replyToken, { type: "text", text: replyText });
   } catch (error) {
